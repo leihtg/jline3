@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2018, the original author or authors.
+ * Copyright (c) 2002-2021, the original author or authors.
  *
  * This software is distributable under the BSD license. See the terms of the
  * BSD license in the documentation provided with this software.
@@ -7,8 +7,6 @@
  * https://opensource.org/licenses/BSD-3-Clause
  */
 package org.jline.utils;
-
-import java.util.Objects;
 
 /**
  * Text styling.
@@ -46,8 +44,8 @@ public class AttributedStyle {
 
     static final long MASK           = 0x00001FFF;
 
-    static final int FG_COLOR_EXP    = 16;
-    static final int BG_COLOR_EXP    = 40;
+    static final int FG_COLOR_EXP    = 15;
+    static final int BG_COLOR_EXP    = 39;
     static final long FG_COLOR        = 0xFFFFFFL << FG_COLOR_EXP;
     static final long BG_COLOR        = 0xFFFFFFL << BG_COLOR_EXP;
 
@@ -206,7 +204,7 @@ public class AttributedStyle {
     }
 
     public AttributedStyle backgroundRgb(int color) {
-        return new AttributedStyle(style & ~FG_COLOR | F_BACKGROUND_RGB | ((((long) color & 0xFFFFFF) << FG_COLOR_EXP) & FG_COLOR), mask | F_BACKGROUND_RGB);
+        return new AttributedStyle(style & ~BG_COLOR | F_BACKGROUND_RGB | ((((long) color & 0xFFFFFF) << BG_COLOR_EXP) & BG_COLOR), mask | F_BACKGROUND_RGB);
     }
 
     public AttributedStyle backgroundOff() {
@@ -263,7 +261,7 @@ public class AttributedStyle {
         AttributedStringBuilder sb = new AttributedStringBuilder();
         sb.styled(this, " ");
         String s = sb.toAnsi(AttributedCharSequence.TRUE_COLORS, AttributedCharSequence.ForceMode.None);
-        return s.substring(2, s.indexOf('m'));
+        return s.length() > 1 ? s.substring(2, s.indexOf('m')) : s;
     }
 
     @Override

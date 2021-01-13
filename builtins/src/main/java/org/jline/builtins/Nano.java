@@ -29,17 +29,8 @@ import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -56,11 +47,7 @@ import org.jline.terminal.Size;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.Terminal.Signal;
 import org.jline.terminal.Terminal.SignalHandler;
-import org.jline.utils.AttributedString;
-import org.jline.utils.AttributedStringBuilder;
-import org.jline.utils.AttributedStyle;
-import org.jline.utils.Display;
-import org.jline.utils.Status;
+import org.jline.utils.*;
 import org.jline.utils.InfoCmp.Capability;
 import org.mozilla.universalchardet.UniversalDetector;
 
@@ -1673,7 +1660,7 @@ public class Nano implements Editor {
         private final List<HighlightRule> highlightRules = new ArrayList<>();
         private final BufferedReader reader;
         private boolean matches = false;
-        private String syntaxName;
+        private String syntaxName = "unknown";
 
         public NanorcParser(Path file, String name, String target) throws IOException {
             this(new Source.PathSource(file, null).read(), name, target);
@@ -1686,8 +1673,10 @@ public class Nano implements Editor {
         }
 
         public void parse() throws IOException {
-            String line = reader.readLine();
-            while (line != null) {
+            String line;
+            int idx = 0;
+            while ((line = reader.readLine()) != null) {
+                idx++;
                 line = line.trim();
                 if (line.length() > 0 && !line.startsWith("#")) {
                     line = line.replaceAll("\\\\<", "\\\\b")
@@ -1731,12 +1720,11 @@ public class Nano implements Editor {
                             matches = true;
                         }
                     } else if (parts.get(0).equals("color")) {
-                        addHighlightRule(parts, false);
+                        addHighlightRule(syntaxName + idx, parts, false);
                     } else if (parts.get(0).equals("icolor")) {
-                        addHighlightRule(parts, true);
+                        addHighlightRule(syntaxName + idx, parts, true);
                     }
                 }
-                line = reader.readLine();
             }
             reader.close();
         }
@@ -1753,87 +1741,11 @@ public class Nano implements Editor {
             return syntaxName.equals(DEFAULT_SYNTAX);
         }
 
-        private Integer toColor(String styleString) {
-            Integer out = null;
-            if (styleString.length() > 0) {
-                out = 0;
-                if (styleString.startsWith("bright")) {
-                    out = AttributedStyle.BRIGHT;
-                    styleString = styleString.substring(6);
-                }
-                if (styleString.equals("white")) {
-                    out += AttributedStyle.WHITE;
-                } else if (styleString.equals("black")) {
-                    out += AttributedStyle.BLACK;
-                } else if (styleString.equals("red")) {
-                    out += AttributedStyle.RED;
-                } else if (styleString.equals("blue")) {
-                    out += AttributedStyle.BLUE;
-                } else if (styleString.equals("green")) {
-                    out += AttributedStyle.GREEN;
-                } else if (styleString.equals("yellow")) {
-                    out += AttributedStyle.YELLOW;
-                } else if (styleString.equals("magenta")) {
-                    out += AttributedStyle.MAGENTA;
-                } else if (styleString.equals("cyan")) {
-                    out += AttributedStyle.CYAN;
-                } else if (styleString.matches("\\d+")) {
-                    out = Integer.parseInt(styleString);
-                }
-            }
-            return out;
-        }
-
-        private AttributedStyle setStyle(String name, AttributedStyle style) {
-            AttributedStyle out = style;
-            switch (name) {
-                case "blink":
-                    out = style.blink();
-                    break;
-                case "bold":
-                    out = style.bold();
-                    break;
-                case "conceal":
-                    out = style.conceal();
-                    break;
-                case "faint":
-                    out = style.faint();
-                    break;
-                case "hidden":
-                    out = style.hidden();
-                    break;
-                case "inverse":
-                    out = style.inverse();
-                    break;
-                case "italic":
-                    out = style.italic();
-                    break;
-                case "underline":
-                    out = style.underline();
-                    break;
-                default:
-            }
-            return out;
-        }
-
-        private void addHighlightRule(List<String> parts, boolean caseInsensitive) {
-            AttributedStyle style = AttributedStyle.DEFAULT.foreground(AttributedStyle.BLACK + AttributedStyle.BRIGHT);
-            String[] styleStrings = parts.get(1).split(",");
-            List<String> styles = Arrays.asList("blink", "bold", "conceal", "faint", "hidden", "inverse", "italic", "underline");
-            int colorStart = 0;
-            // GNU nano version >= v5 support styles: bold and italic, rest jline extension
-            while (styles.contains(styleStrings[colorStart])) {
-                style = setStyle(styleStrings[colorStart], style);
-                colorStart++;
-            }
-            Integer fcolor = toColor(styleStrings[colorStart]);
-            Integer bcolor = styleStrings.length > 1 + colorStart ? toColor(styleStrings[colorStart + 1]) : null;
-            if (fcolor != null) {
-                style = style.foreground(fcolor);
-            }
-            if (bcolor != null) {
-                style = style.background(bcolor);
-            }
+        private void addHighlightRule(String reference, List<String> parts, boolean caseInsensitive) {
+            Map<String,String> spec = new HashMap<>();
+            spec.put(reference, parts.get(1));
+            Styles.StyleCompiler sh = new Styles.StyleCompiler(spec, true);
+            AttributedStyle style = new StyleResolver(sh::getStyle).resolve("." + reference);
 
             if (HighlightRule.evalRuleType(parts) == HighlightRule.RuleType.PATTERN) {
                 for (int i = 2; i < parts.size(); i++) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2020, the original author or authors.
+ * Copyright (c) 2002-2021, the original author or authors.
  *
  * This software is distributable under the BSD license. See the terms of the
  * BSD license in the documentation provided with this software.
@@ -1039,27 +1039,63 @@ public class Commands {
                 "colors -  view 256-color table",
                 "Usage: colors [OPTIONS]",
                 "  -? --help                     Displays command help",
-                "  -c --columns=COLUMNS          Number of columns in name table",
+                "  -c --columns=COLUMNS          Number of columns in name/rgb table",
+                "                                COLUMNS = 1, display columns: color, style, ansi and HSL",
+                "  -f --find=NAME                Find color names which contains NAME ",
+                "  -l --lock=STYLE               Lock fore- or background color",
                 "  -n --name                     Color name table (default number table)",
-                "  -s --small                    View 16-color table (default 256-color)"
+                "  -r --rgb                      Use and display rgb value",
+                "  -s --small                    View 16-color table (default 256-color)",
+                "  -v --view=COLOR               View 24bit color table of COLOR ",
+                "                                COLOR = <colorName>, <color24bit> or hue<angle>"
         };
         Options opt = Options.compile(usage).parse(argv);
         if (opt.isSet("help")) {
             throw new Options.HelpException(opt.usage());
         }
-        int columns = 256;
-        if (opt.isSet("columns")) {
-            columns = opt.getNumber("columns");
+        String style = null;
+        if (opt.isSet("lock")) {
+            style = opt.get("lock");
+            if (style.length() - style.replace(":", "").length() > 1) {
+                style = null;
+            }
         }
-        new Colors(terminal, out).printColors(opt.isSet("name"), opt.isSet("small"), columns);
+        Colors colors = new Colors(terminal, out);
+        if (!opt.isSet("view")) {
+            boolean rgb = opt.isSet("rgb");
+            int columns = terminal.getWidth() > (rgb ? 71 : 122) ? 6 : 5;
+            String findName = null;
+            boolean nameTable = opt.isSet("name");
+            boolean table16 = opt.isSet("small");
+            if (opt.isSet("find")) {
+                findName = opt.get("find").toLowerCase();
+                nameTable = true;
+                table16 = false;
+                columns = 4;
+            }
+            if (table16) {
+                columns = columns + 2;
+            }
+            if (opt.isSet("columns")) {
+                columns = opt.getNumber("columns");
+            }
+            colors.printColors(nameTable, rgb, table16, columns, findName, style);
+        } else {
+            colors.printColor(opt.get("view").toLowerCase(), style);
+        }
     }
 
     private static class Colors {
+        private static final String COLORS_24BIT = "[0-9a-fA-F]{6}";
+        private static final List<String> COLORS_16 = Arrays.asList("black","red","green","yellow","blue","magenta","cyan","white"
+                , "!black","!red","!green","!yellow","!blue","!magenta","!cyan","!white");
         boolean name;
+        boolean rgb;
         private final Terminal terminal;
         private final PrintStream out;
-        private final List<String> colors = Arrays.asList("black","red","green","yellow","blue","magenta","cyan","white"
-                , "!black","!red","!green","!yellow","!blue","!magenta","!cyan","!white");
+        private boolean fixedBg;
+        private String fixedStyle;
+        int r, g, b;
 
         public Colors(Terminal terminal, PrintStream out) {
             this.terminal = terminal;
@@ -1070,18 +1106,25 @@ public class Commands {
             String out;
             char fg = ' ';
             if (name) {
-                out = "bg:~" + color.substring(1);
+                out = (fixedBg ? "fg:" : "bg:") + "~" + color.substring(1);
+                fg = color.charAt(0);
+            } else if (rgb) {
+                out = (fixedBg ? "fg-rgb:" : "bg-rgb:") + "#" + color.substring(1);
                 fg = color.charAt(0);
             } else if (color.substring(1).matches("\\d+")) {
-                out = "48;5;" + color.substring(1);
+                out = (fixedBg ? "38;5;" : "48;5;") + color.substring(1);
                 fg = color.charAt(0);
             } else {
-                out = "bg:" + color;
+                out = (fixedBg ? "fg:" : "bg:") + color;
             }
-            if (color.startsWith("!") || color.equals("white") || fg == 'b') {
-                out += ",fg:black";
+            if (fixedStyle == null) {
+                if (color.startsWith("!") || color.equals("white") || fg == 'b') {
+                    out += ",fg:black";
+                } else {
+                    out += ",fg:!white";
+                }
             } else {
-                out += ",fg:!white";
+                out += "," + fixedStyle;
             }
             return out;
         }
@@ -1115,12 +1158,43 @@ public class Commands {
              return lp.toString() + field + rp.toString();
         }
 
-        public void printColors(boolean name, boolean small, int columns) throws IOException {
-            this.name = name;
+        private String addLeftPadding(int width, String field) {
+            int s = width - field.length();
+            StringBuilder lp = new StringBuilder();
+            for (int i = 0; i < s; i++) {
+                lp.append(" ");
+            }
+            return lp.toString() + field;
+        }
+
+        private void setFixedStyle(String style) {
+            this.fixedStyle = style;
+            if (style != null && (style.contains("b:") || style.contains("b-")
+                    || style.contains("bg:") || style.contains("bg-") || style.contains("background"))) {
+                fixedBg = true;
+            }
+        }
+
+        private List<String> retrieveColorNames() throws IOException {
+            List<String> out;
+            try (InputStream is = new Source.ResourceSource("/org/jline/utils/colors.txt", null).read();
+                 BufferedReader br = new BufferedReader(new java.io.InputStreamReader(is))) {
+                out = br.lines().map(String::trim)
+                        .filter(s -> !s.startsWith("#"))
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+            }
+            return out;
+        }
+
+        public void printColors(boolean name, boolean rgb, boolean small, int columns, String findName, String style) throws IOException {
+            this.name = !rgb && name;
+            this.rgb = rgb;
+            setFixedStyle(style);
             AttributedStringBuilder asb = new AttributedStringBuilder();
             int width = terminal.getWidth();
             String tableName = small ? " 16-color " : "256-color ";
-            if (!name) {
+            if (!name && !rgb) {
                 out.print(tableName);
                 out.print("table, fg:<name> ");
                 if (!small) {
@@ -1133,7 +1207,7 @@ public class Commands {
                 }
                 out.println("\n");
                 boolean narrow = width <  180;
-                for (String c : colors) {
+                for (String c : COLORS_16) {
                     AttributedStyle ss = new StyleResolver(this::getStyle).resolve('.' + c, null);
                     asb.style(ss);
                     asb.append(addPadding(11,c));
@@ -1176,38 +1250,308 @@ public class Commands {
                 }
             } else {
                 out.print(tableName);
-                out.println("table, fg:~<name> OR 38;5;<n>");
-                out.println("                 bg:~<name> OR 48;5;<n>");
+                if (name) {
+                    asb.tabs(Arrays.asList(25,60,75));
+                    out.println("table, fg:~<name> OR 38;5;<n>");
+                    out.println("                 bg:~<name> OR 48;5;<n>");
+                } else {
+                    asb.tabs(Arrays.asList(15,45,70));
+                    out.println("table, fg-rgb:<color24bit> OR 38;5;<n>");
+                    out.println("                 bg-rgb:<color24bit> OR 48;5;<n>");
+                }
                 out.println();
-                InputStream inputStream = new Source.ResourceSource("/org/jline/utils/colors.txt", null).read();
-                BufferedReader reader = new BufferedReader(new java.io.InputStreamReader(inputStream));
-                String line = reader.readLine();
                 int col = 0;
-                Integer idx = 0;
-                int colWidth = 22;
-                while (line != null) {
-                    line = line.trim();
-                    if (!line.isEmpty() && !line.startsWith("#")) {
-                        String fg = foreground(idx);
-                        AttributedStyle ss = new StyleResolver(this::getStyle).resolve("." + fg + line, null);
-                        asb.style(ss);
-                        asb.append(String.valueOf(idx)).append(addPadding(colWidth - idx.toString().length(), line));
-                        col++;
-                        idx++;
-                        if ((col + 1)*colWidth > width || col + 1 > columns) {
+                int idx = 0;
+                int colWidth = rgb ? 12 : 21;
+                int lb = 1;
+                if (findName != null && (findName.startsWith("#") || findName.startsWith("x"))) {
+                    findName = findName.substring(1);
+                }
+                for (String line : retrieveColorNames()) {
+                    if (rgb) {
+                        // do nothing
+                    } else if (findName != null) {
+                        if (!line.toLowerCase().contains(findName)) {
+                            idx++;
+                            continue;
+                        }
+                    } else if (small) {
+                        colWidth = 15;
+                        lb = 1;
+                    } else if (columns > 4) {
+                        if (idx > 15 && idx < 232) {
+                            colWidth = columns != 6 || col == 1 || col == 2 || col == 3 ? 21 : 20;
+                            lb = 1;
+                        } else {
+                            colWidth =  columns != 6 || idx % 2 == 0 || col == 7 ? 15 : 16;
+                            lb = -1;
+                        }
+                    }
+                    String fg = foreground(idx);
+                    if (rgb) {
+                        line = Integer.toHexString(org.jline.utils.Colors.DEFAULT_COLORS_256[idx]);
+                        for (int p = line.length(); p < 6; p++) {
+                            line = "0" + line;
+                        }
+                        if (findName != null) {
+                            if (!line.toLowerCase().matches(findName)) {
+                                idx++;
+                                continue;
+                            }
+                        }
+                    }
+                    AttributedStyle ss = new StyleResolver(this::getStyle).resolve("." + fg + line, null);
+                    if (rgb) {
+                        line = "#" + line;
+                    }
+                    asb.style(ss);
+                    String idxstr = Integer.toString(idx);
+                    if (rgb) {
+                        if (idx < 10) {
+                            idxstr = "  " + idxstr;
+                        } else if (idx < 100) {
+                            idxstr =  " " + idxstr;
+                        }
+                    }
+                    asb.append(idxstr).append(addPadding(colWidth - idxstr.length(), line));
+                    if (columns == 1) {
+                        asb.style(AttributedStyle.DEFAULT);
+                        asb.append("\t").append(getStyle(fg + line.substring(rgb ? 1 : 0)));
+                        asb.append("\t").append(ss.toAnsi());
+                        int[] rgb1 = rgb(org.jline.utils.Colors.DEFAULT_COLORS_256[idx]);
+                        int[] hsl = rgb2hsl(rgb1[0], rgb1[1], rgb1[2]);
+                        asb.append("\t").append(addLeftPadding(6, hsl[0] + ", "))
+                                .append(addLeftPadding(4,hsl[1] + "%"))
+                                .append(", ").append(addLeftPadding(4,hsl[2] + "%"));
+                    }
+                    col++;
+                    idx++;
+                    if ((col + 1)*colWidth > width || col + lb > columns) {
+                        col = 0;
+                        asb.style(AttributedStyle.DEFAULT);
+                        asb.append('\n');
+                    }
+                    if (findName == null) {
+                        if (idx == 16) {
+                            if (small) {
+                                break;
+                            } else if (col != 0) {
+                                col = 0;
+                                asb.style(AttributedStyle.DEFAULT);
+                                asb.append('\n');
+                            }
+                        } else if (idx == 232 && col != 0) {
                             col = 0;
                             asb.style(AttributedStyle.DEFAULT);
                             asb.append('\n');
                         }
                     }
-                    if (small && idx == 16) {
-                        break;
-                    }
-                    line = reader.readLine();
                 }
-                reader.close();
             }
             asb.toAttributedString().println(terminal);
+        }
+
+        private int[] rgb(long color) {
+            int[] rgb = {0,0,0};
+            rgb[0] = (int)((color >> 16) & 0xFF);
+            rgb[1] = (int)((color >> 8) & 0xFF);
+            rgb[2] = (int)(color & 0xFF);
+            return rgb;
+        }
+
+        private int[] hue2rgb(int degree) {
+            int[] rgb = {0,0,0};
+            double hue = degree / 60.0;
+            double a = Math.tan((degree / 360.0) * 2 * Math.PI) / Math.sqrt(3);
+            if (hue >= 0 && hue <= 1) {
+                rgb[0] = 0xff;
+                rgb[1] = (int) (2 * a * 0xff / (1 + a));
+            } else if (hue >= 1 && hue <= 2) {
+                rgb[0] = (int) (0xff * (1 + a) / (2 * a));
+                rgb[1] = 0xff;
+            } else if (hue >= 2 && hue <= 3) {
+                rgb[1] = 0xff;
+                rgb[2] = (int) (0xff * (1 + a) / (1 - a));
+            } else if (hue >= 3 && hue <= 4) {
+                rgb[1] = (int) (0xff * (1 - a) / (1 + a));
+                rgb[2] = 0xff;
+            } else if (hue >= 4 && hue <= 5) {
+                rgb[0] = (int) (0xff * (a - 1) / (2 * a));
+                rgb[2] = 0xff;
+            } else if (hue >= 5 && hue <= 6) {
+                rgb[0] = 0xff;
+                rgb[2] = (int) (0xff * 2 * a / (a - 1));
+            }
+            return rgb;
+        }
+
+        private int[] rgb2hsl(int r, int g, int b) {
+            int[] hsl = {0, 0, 0};
+            if (r != 0 || g != 0 || b != 0) {
+                hsl[0] = (int)Math.round((180/Math.PI)*Math.atan2(Math.sqrt(3)*(g-b),2*r - g - b));
+                while (hsl[0] < 0) {
+                    hsl[0] += 360;
+                }
+            }
+            double mx = Math.max(Math.max(r,g),b)/255.0;
+            double mn = Math.min(Math.min(r,g),b)/255.0;
+            double l = (mx + mn)/2;
+            hsl[1] = l == 0 || l == 1 ? 0 : (int)Math.round(100.0*(mx - mn)/(1 - Math.abs(2*l - 1)));
+            hsl[2] = (int)Math.round(100*l);
+            return hsl;
+        }
+
+        String getStyleRGB(String s) {
+            if (fixedStyle == null) {
+                double ry = Math.pow(r / 255.0, 2.2);
+                double by = Math.pow(b / 255.0, 2.2);
+                double gy = Math.pow(g / 255.0, 2.2);
+                double y = 0.2126 * ry + 0.7151 * gy + 0.0721 * by;
+                String fg = "black";
+                if (1.05 / (y + 0.05) > (y + 0.05) / 0.05) {
+                    fg = "white";
+                }
+                return "bg-rgb:" + String.format("#%02x%02x%02x", r, g, b) + ",fg:" + fg;
+            } else {
+                return (fixedBg ? "fg-rgb:" : "bg-rgb:") + String.format("#%02x%02x%02x", r, g, b) + "," + fixedStyle;
+            }
+        }
+
+        public void printColor(String name, String style) throws IOException {
+            setFixedStyle(style);
+            int hueAngle;
+            double zoom = 1;
+            int[] rgb = {0, 0, 0};
+            if (name.matches(COLORS_24BIT)) {
+                rgb = rgb(Long.parseLong(name, 16));
+                zoom = 2;
+            } else if ((name.startsWith("#") || name.startsWith("x")) && name.substring(1).matches(COLORS_24BIT)) {
+                rgb = rgb(Long.parseLong(name.substring(1), 16));
+                zoom = 2;
+            } else if (COLORS_16.contains(name)) {
+                for (int i = 0; i < 16; i++) {
+                    if (COLORS_16.get(i).equals(name)) {
+                        rgb = rgb(org.jline.utils.Colors.DEFAULT_COLORS_256[i]);
+                        break;
+                    }
+                }
+            } else if (name.matches("hue[1-3]?[0-9]{1,2}")) {
+                hueAngle = Integer.parseInt(name.substring(3));
+                if (hueAngle > 360) {
+                    throw new IllegalArgumentException("Color not found: " + name);
+                }
+                rgb = hue2rgb(hueAngle);
+            } else if (name.matches("[a-z0-9]+")) {
+                List<String> colors = retrieveColorNames();
+                if (colors.contains(name)) {
+                    for (int i = 0; i < 256; i++) {
+                        if (colors.get(i).equals(name)) {
+                            rgb = rgb(org.jline.utils.Colors.DEFAULT_COLORS_256[i]);
+                            break;
+                        }
+                    }
+                } else {
+                    boolean found = false;
+                    for (int i = 0; i < 256; i++) {
+                        if (colors.get(i).startsWith(name)) {
+                            rgb = rgb(org.jline.utils.Colors.DEFAULT_COLORS_256[i]);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        for (int i = 0; i < 256; i++) {
+                            if (colors.get(i).contains(name)) {
+                                rgb = rgb(org.jline.utils.Colors.DEFAULT_COLORS_256[i]);
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found) {
+                        throw new IllegalArgumentException("Color not found: " + name);
+                    }
+                }
+            } else {
+                throw new IllegalArgumentException("Color not found: " + name);
+            }
+            double step = 32;
+            int barSize = 14;
+            int width = terminal.getWidth();
+            if (width > 287) {
+                step = 8;
+                barSize = 58;
+            } else if (width > 143) {
+                step = 16;
+                barSize = 29;
+            } else if (width > 98) {
+                step = 24;
+                barSize = 18;
+            }
+            r = rgb[0];
+            g = rgb[1];
+            b = rgb[2];
+            int[] hsl = rgb2hsl(r, g, b);
+            hueAngle = hsl[0];
+            out.println("HSL: " + hsl[0] + "deg, " + hsl[1] + "%, " + hsl[2] + "%");
+            if (hsl[2] > 85 || hsl[2] < 15 || hsl[1] < 15) {
+                zoom = 1;
+            }
+            double div = zoom*256.0/step;
+            int ndiv = (int)(div/zoom);
+            double xrs = (0xFF - r)/div;
+            double xgs = (0xFF - g)/div;
+            double xbs = (0xFF - b)/div;
+            double[] yrs = new double[ndiv], ygs = new double[ndiv], ybs = new double[ndiv];
+            double[] ro = new double[ndiv], go = new double[ndiv], bo = new double[ndiv];
+            AttributedStringBuilder asb = new AttributedStringBuilder();
+            for (int y = 0; y < ndiv; y++) {
+                for (int x = 0; x < ndiv; x++) {
+                    if (y == 0) {
+                        yrs[x] = (rgb[0] + x*xrs)/div;
+                        ygs[x] = (rgb[1] + x*xgs)/div;
+                        ybs[x] = (rgb[2] + x*xbs)/div;
+                        ro[x] = rgb[0] + x*xrs;
+                        go[x] = rgb[1] + x*xgs;
+                        bo[x] = rgb[2] + x*xbs;
+                        r = (int)ro[x];
+                        g = (int)go[x];
+                        b = (int)bo[x];
+                    } else {
+                        r = (int)(ro[x] - y*yrs[x]);
+                        g = (int)(go[x] - y*ygs[x]);
+                        b = (int)(bo[x] - y*ybs[x]);
+                    }
+                    String col = String.format("%02x%02x%02x", r, g, b);
+                    AttributedStyle s = new StyleResolver(this::getStyleRGB).resolve(".rgb" + col);
+                    asb.style(s);
+                    asb.append(" ").append("#").append(col).append(" ");
+                }
+                asb.style(AttributedStyle.DEFAULT).append("\n");
+            }
+            asb.toAttributedString().println(terminal);
+            if (hueAngle != -1) {
+                int dAngle = 5;
+                int zero = (int)(hueAngle - (dAngle/2.0)*(barSize - 1));
+                zero = zero - zero % 5;
+                AttributedStringBuilder asb2 = new AttributedStringBuilder();
+                for (int i = 0; i < barSize; i++) {
+                    int angle = zero + dAngle*i;
+                    while (angle < 0) {
+                        angle += 360;
+                    }
+                    while (angle > 360) {
+                        angle -= 360;
+                    }
+                    rgb = hue2rgb(angle);
+                    r = rgb[0]; g = rgb[1]; b = rgb[2];
+                    AttributedStyle s = new StyleResolver(this::getStyleRGB).resolve(".hue" + angle);
+                    asb2.style(s);
+                    asb2.append(" ").append(addPadding(3, "" + angle)).append(" ");
+                }
+                asb2.style(AttributedStyle.DEFAULT).append("\n");
+                asb2.toAttributedString().println(terminal);
+            }
         }
     }
 

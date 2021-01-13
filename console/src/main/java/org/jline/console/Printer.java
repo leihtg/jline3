@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2020, the original author or authors.
+ * Copyright (c) 2002-2021, the original author or authors.
  *
  * This software is distributable under the BSD license. See the terms of the
  * BSD license in the documentation provided with this software.
@@ -19,6 +19,7 @@ import java.util.Map;
  * @author <a href="mailto:matti.rintanikkola@gmail.com">Matti Rinta-Nikkola</a>
  */
 public interface Printer {
+    enum TableRows {EVEN, ODD, ALL}
     //
     // option names
     //
@@ -126,6 +127,18 @@ public interface Printer {
      * Display width (default terminal width).
      */
     String WIDTH = "width";
+    /**
+     * Value: String<br>
+     * Applies: TABLE<br>
+     * Table cell vertical border character.
+     */
+    String BORDER = "border";
+    /**
+     * Value: TableRows<br>
+     * Applies: TABLE<br>
+     * Highlight table rows.
+     */
+    String ROW_HIGHLIGHT = "rowHighlight";
     //
     //  2) additional PRNT_OPTIONS
     //
